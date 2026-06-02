@@ -123,15 +123,175 @@ daymet_pert <- daymet_final %>%
 head(daymet_mel)
 head(daymet_pert)
 
-
-#========================================================================================
-# Daymet all pixels of Suffolk VA
-
 #========================================================================================
 # Daymet Data; grabbing every pixel within boundary of Suffolk, VA
 
-library(tigris)
+# library(tigris)
+# 
+# library(tidyverse)
+# library(terra)
+# library(daymetr)
+# 
+# # 1. Define the exact bounding box from your plot image
+# plot_extent <- ext(-76.88, -76.4, 36.5, 36.95)
+# 
+# # 2. Create a grid of points inside this box spaced ~1km apart
+# empty_grid <- rast(plot_extent, res = 0.015, crs = "EPSG:4326")
+# 
+# # 3. Extract the latitude and longitude of every single pixel center
+# pixel_coords <- as.data.frame(crds(empty_grid)) %>%
+#   rename(
+#     sample_long_dd = x,
+#     sample_lat_dd = y
+#   ) %>%
+#   mutate(site_id = paste0("pixel_", row_number()))
+# 
+# # 4. Run the Daymet extraction with error handling for water pixels
+# start_year <- 2023
+# end_year <- 2023
+# 
+# daymet_points_all <- pixel_coords %>%
+#   mutate(
+#     weather_data = purrr::map2(sample_lat_dd, sample_long_dd, ~{
+#       
+#       #Sys.sleep(0.4) # Brief pause to keep the server happy
+#       
+#       # tryCatch prevents water pixels from crashing the loop
+#       tryCatch({
+#         download_daymet(
+#           site = "mosquito_site",
+#           lat = .x,
+#           lon = .y,
+#           start = start_year,
+#           end = end_year,
+#           internal = TRUE 
+#         )$data
+#       }, error = function(e) {
+#         # If the server throws an "outside spatial coverage" error, return NULL
+#         return(NULL)
+#       })
+#     })
+#   ) %>%
+#   # Filter out any pixels that returned NULL (the water cells)
+#   filter(!purrr::map_lgl(weather_data, is.null)) %>%
+#   # Unnest the successful land pixels into a flat dataframe
+#   unnest(weather_data)
 
-# 1. Define the exact bounding box from your plot image
-# Longitude (x): -76.88 to -76.4 | Latitude (y): 36.5 to 36.95
-plot_extent <- ext(-76.88, -76.4, 36.5, 36.95)
+daymet_points_all <- readRDS("daymet_points_all.RDS")
+
+# View the final dataset (water pixels will be cleanly skipped)
+head(daymet_points_all)
+
+#========================================================================================
+# Co-variates for just a month
+
+daymet_final_all <- daymet_points_all %>% 
+  filter(yday >= 152, yday <= 182) %>% 
+  rename(
+    lat = sample_lat_dd,
+    long = sample_long_dd,
+    year = year,
+    yday = yday,
+    max_temp = tmax..deg.c.,
+    min_temp = tmin..deg.c.,
+    precip = prcp..mm.day.,
+    vapor = vp..Pa.
+  ) %>% 
+  mutate(avg_temp = (max_temp + min_temp)/2) %>% 
+  select(site_id, lat, long, year, yday, min_temp, max_temp, avg_temp, precip, vapor) %>% 
+  group_by(site_id, lat, long, year) %>% 
+  summarize(
+    # Calculate the average for temperatures and vapor pressure
+    mean_min_temp = mean(min_temp, na.rm = TRUE),
+    mean_max_temp = mean(max_temp, na.rm = TRUE),
+    mean_avg_temp = mean(avg_temp, na.rm = TRUE),
+    mean_vapor = mean(vapor, na.rm = TRUE),
+    mean_precip = mean(precip, na.rm = TRUE), 
+    .groups = "drop" # Ungroups the data so it doesn't cause issues later
+  )
+
+#========================================================================================
+# Making DF into Raster
+
+raster_df <- daymet_final_all %>%
+  ungroup() %>% # Always a good habit after summarizing
+  select(
+    long, lat, # Coordinates MUST be first
+    mean_min_temp, mean_max_temp, mean_avg_temp, mean_precip, mean_vapor # Variables follow
+  )
+
+# 2. Convert the dataframe directly into a SpatRaster
+# type="xyz" tells terra that the first two columns are our spatial grid
+# We assign the standard WGS84 latitude/longitude CRS (EPSG:4326)
+daymet_raster <- rast(raster_df, type = "xyz", crs = "EPSG:4326")
+
+# 3. Verify the conversion worked
+print(daymet_raster)
+
+# 4. Plot one of the layers to visually confirm the shape (e.g., Average Temp)
+plot(daymet_raster[["mean_avg_temp"]], main = "Average Temp (Days 152-182)")
+
+# 5. Save the new raster to your working directory
+# This creates a single multi-band GeoTIFF file containing all 5 of your variables
+writeRaster(daymet_raster, "suffolk_daymet_monthly_summary.tif", overwrite = TRUE)
+
+daymet_suff <- readRDS("daymet_suff.RDS")
+
+#========================================================================================
+
+# source("rb.R")
+# 
+# df_mel <- daymet_mel %>% select(6:10)
+# df_pert <- daymet_pert %>% select(6:10)
+# 
+# mela_rb <- rb(df_mel, v = 500, d = 2, p = 0.5)
+# #pert_rb <- rb(df_pert, v = 500, d = 2, p = 0.5)
+# 
+# daymet_final_all_1 <- daymet_final_all %>% select(5:7, 9, 8) %>% rename(
+#   min_temp = mean_min_temp,
+#   max_temp = mean_max_temp,
+#   avg_temp = mean_avg_temp,
+#   precip = mean_precip,
+#   vapor = mean_vapor
+# )
+# 
+# 
+# mela_preds <- rb.test(mela_rb, daymet_final_all_1)
+
+
+#========================================================================================
+# Min and Max of Each Covariate
+
+summary_mel <- daymet_mel %>%
+  summarise(
+    pop = "mel",
+    min_min_temp = min(min_temp, na.rm = TRUE),
+    max_min_temp = max(min_temp, na.rm = TRUE),
+    min_max_temp = min(max_temp, na.rm = TRUE),
+    max_max_temp = max(max_temp, na.rm = TRUE),
+    min_avg_temp = min(avg_temp, na.rm = TRUE),
+    max_avg_temp = max(avg_temp, na.rm = TRUE),
+    min_precip   = min(precip, na.rm = TRUE),
+    max_precip   = max(precip, na.rm = TRUE),
+    min_vapor    = min(vapor, na.rm = TRUE),
+    max_vapor    = max(vapor, na.rm = TRUE)
+  )
+
+summary_pert <- daymet_pert %>%
+  summarise(
+    pop = "pert",
+    min_min_temp = min(min_temp, na.rm = TRUE),
+    max_min_temp = max(min_temp, na.rm = TRUE),
+    min_max_temp = min(max_temp, na.rm = TRUE),
+    max_max_temp = max(max_temp, na.rm = TRUE),
+    min_avg_temp = min(avg_temp, na.rm = TRUE),
+    max_avg_temp = max(avg_temp, na.rm = TRUE),
+    min_precip   = min(precip, na.rm = TRUE),
+    max_precip   = max(precip, na.rm = TRUE),
+    min_vapor    = min(vapor, na.rm = TRUE),
+    max_vapor    = max(vapor, na.rm = TRUE)
+  )
+
+daymet_min_max <- bind_rows(summary_mel, summary_pert)
+
+print(daymet_min_max)
