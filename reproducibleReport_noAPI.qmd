@@ -280,6 +280,3 @@ mosqMod1 <- lm(totalMos ~ time + totalMos_lag1 + sinSeason + cosSeason,
 hist(mosqMod1)
 
 ```
-
-
-
