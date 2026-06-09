@@ -1,4 +1,5 @@
-# elango_project
-VectorByte Workshop Repo
+# VectorByte Workshop Repo
 
-Hi
+## Elango Project
+
+Contains all my code from the VectorByte 2026 projects
